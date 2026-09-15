@@ -4,3 +4,5 @@ httpx
 python-multipart
 PyMuPDF
 Pillow
+huggingface_hub
+gradio
