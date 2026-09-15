@@ -3,33 +3,46 @@ import re
 import json
 import io
 import httpx
-import pymupdf as fitz  # Đã sửa lại chuẩn theo khuyến cáo
+import pymupdf as fitz
 from PIL import Image, ImageDraw, ImageFont
 from huggingface_hub import HfApi
 from fastapi import FastAPI, BackgroundTasks, Request
 from fastapi.responses import JSONResponse
 import gradio as gr
 
-# --- CẤU HÌNH HUGGING FACE DATASET ---
-HF_REPO_ID = "chuong090703/sinature"
-HF_TOKEN = os.getenv("HF_TOKEN", "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")
+# --- CƠ CHẾ LOAD ENV CHO CẢ LOCAL VÀ CLOUD ---
+try:
+    from dotenv import load_dotenv
+    # Thử load file .env (chủ yếu dùng khi chạy local)
+    dotenv_loaded = load_dotenv()
+    print(f"--> [ENV CONFIG] Đã nạp file .env thành công? {dotenv_loaded}")
+except ImportError:
+    print("--> [ENV CONFIG] Thư viện python-dotenv chưa được cài đặt, bỏ qua load file .env.")
 
-hf_api = HfApi()
-
-app = FastAPI(title="Twenty CRM Real Signing Mock Server")
-
-# Thêm route gốc để tránh lỗi 404 khi Health Check hệ thống
-@app.get("/")
-async def root_health_check():
-    return {"status": "ok", "message": "Service is running successfully!"}
+# --- CẤU HÌNH TỪ BIẾN MÔI TRƯỜNG (ENV) ---
+HF_REPO_ID = os.getenv("HF_REPO_ID", "chuong090703/sinature")
+HF_TOKEN = os.getenv("HF_TOKEN")
 
 TWENTY_CRM_WEBHOOK_URL = os.getenv(
     "TWENTY_CRM_WEBHOOK_URL", 
     "https://tinasoft.tinacrm.tinasoft.io/webhooks/workflows/14d89b50-1301-4711-8f12-c8741562ca61/ec081d02-c556-4c3b-a1a6-d33d1c4cf03b"
 )
 
-# Đường dẫn ảnh chữ ký tay
-SIGNATURE_IMAGE_URL = "https://i.pinimg.com/736x/43/da/7d/43da7d45279d0f4c042a2bf2079f918b.jpg"
+SIGNATURE_IMAGE_URL = os.getenv(
+    "SIGNATURE_IMAGE_URL", 
+    "https://i.pinimg.com/736x/43/da/7d/43da7d45279d0f4c042a2bf2079f918b.jpg"
+)
+
+# --- IN RA CONSOLE ĐỂ KIỂM TRA TRẠNG THÁI BIẾN MÔI TRƯỜNG ---
+print("================ [CẤU HÌNH HỆ THỐNG] ================")
+print(f"👉 HF_REPO_ID          : {HF_REPO_ID}")
+print(f"👉 HF_TOKEN hiện tại   : {'[ĐÃ CÓ TOKEN - ' + HF_TOKEN[:6] + '...]' if HF_TOKEN and len(HF_TOKEN) > 5 else '[CHƯA CÓ HOẶC RỖNG!]'}")
+print(f"👉 TWENTY_CRM_WEBHOOK  : {TWENTY_CRM_WEBHOOK_URL}")
+print("=====================================================")
+
+hf_api = HfApi()
+
+app = FastAPI(title="Twenty CRM Real Signing Mock Server")
 
 
 def extract_url_from_text(raw_text: str) -> str:
@@ -96,6 +109,7 @@ def create_signature_image_bytes(signer_name: str) -> bytes:
     text_name = f"Người ký: {signer_name}"
     text_date = "Ngày: 2026-09-14"
 
+    # Hàm tính tọa độ X để căn giữa văn bản tuyệt đối
     def get_centered_x(text, font):
         try:
             bbox = font.getbbox(text)
@@ -104,9 +118,11 @@ def create_signature_image_bytes(signer_name: str) -> bytes:
             w = len(text) * 7
         return (img_width - w) / 2
 
+    # 1. Tiêu đề căn giữa
     x_title = get_centered_x(text_title, font_title)
     draw.text((x_title, 20), text_title, fill=(204, 0, 0), font=font_title)
 
+    # 2. Tải và xử lý chữ ký tay (chuyển nền trắng thành trong suốt, nét chữ thành màu đen) căn giữa
     try:
         response = httpx.get(SIGNATURE_IMAGE_URL, timeout=10.0)
         if response.status_code == 200:
@@ -114,6 +130,7 @@ def create_signature_image_bytes(signer_name: str) -> bytes:
             sig_width, sig_height = 160, 70
             sig_img = sig_img.resize((sig_width, sig_height))
             
+            # Xóa nền trắng và đổi thành chữ đen
             datas = sig_img.getdata()
             new_data = []
             for item in datas:
@@ -128,9 +145,11 @@ def create_signature_image_bytes(signer_name: str) -> bytes:
     except Exception as e:
         print(f"[SIGNATURE IMAGE ERROR] Không thể tải ảnh chữ ký tay: {e}")
 
+    # 3. Tên người ký căn giữa
     x_name = get_centered_x(text_name, font_body)
     draw.text((x_name, 175), text_name, fill=(204, 0, 0), font=font_body)
 
+    # 4. Ngày tháng căn giữa
     x_date = get_centered_x(text_date, font_body)
     draw.text((x_date, 205), text_date, fill=(204, 0, 0), font=font_body)
 
@@ -271,5 +290,4 @@ async def mock_sign_request(request: Request, background_tasks: BackgroundTasks)
 with gr.Blocks(title="Twenty CRM Signing API") as demo:
     gr.Markdown("# 🖋️ Twenty CRM PDF Signing Backend")
 
-# Mount Gradio đè lên route khác hoặc giữ nguyên path phụ, đồng thời route chính "/" ở trên sẽ lo phần health check
-app = gr.mount_gradio_app(app, demo, path="/gradio")
+app = gr.mount_gradio_app(app, demo, path="/")
