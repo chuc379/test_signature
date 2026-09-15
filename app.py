@@ -6,14 +6,13 @@ import httpx
 import pymupdf as fitz
 from PIL import Image, ImageDraw, ImageFont
 from huggingface_hub import HfApi
-from fastapi import FastAPI, BackgroundTasks, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import gradio as gr
 
 # --- CƠ CHẾ LOAD ENV CHO CẢ LOCAL VÀ CLOUD ---
 try:
     from dotenv import load_dotenv
-    # Thử load file .env (chủ yếu dùng khi chạy local)
     dotenv_loaded = load_dotenv()
     print(f"--> [ENV CONFIG] Đã nạp file .env thành công? {dotenv_loaded}")
 except ImportError:
@@ -92,7 +91,6 @@ def create_signature_image_bytes(signer_name: str) -> bytes:
     image = Image.new("RGBA", (img_width, img_height), (255, 255, 255, 0))
     draw = ImageDraw.Draw(image)
 
-    # Vẽ khung con dấu nền đỏ nhạt, viền đỏ
     draw.rectangle([10, 10, img_width - 10, img_height - 10], fill=(255, 235, 235), outline=(204, 0, 0), width=3)
 
     try:
@@ -109,7 +107,6 @@ def create_signature_image_bytes(signer_name: str) -> bytes:
     text_name = f"Người ký: {signer_name}"
     text_date = "Ngày: 2026-09-14"
 
-    # Hàm tính tọa độ X để căn giữa văn bản tuyệt đối
     def get_centered_x(text, font):
         try:
             bbox = font.getbbox(text)
@@ -118,11 +115,9 @@ def create_signature_image_bytes(signer_name: str) -> bytes:
             w = len(text) * 7
         return (img_width - w) / 2
 
-    # 1. Tiêu đề căn giữa
     x_title = get_centered_x(text_title, font_title)
     draw.text((x_title, 20), text_title, fill=(204, 0, 0), font=font_title)
 
-    # 2. Tải và xử lý chữ ký tay (chuyển nền trắng thành trong suốt, nét chữ thành màu đen) căn giữa
     try:
         response = httpx.get(SIGNATURE_IMAGE_URL, timeout=10.0)
         if response.status_code == 200:
@@ -130,7 +125,6 @@ def create_signature_image_bytes(signer_name: str) -> bytes:
             sig_width, sig_height = 160, 70
             sig_img = sig_img.resize((sig_width, sig_height))
             
-            # Xóa nền trắng và đổi thành chữ đen
             datas = sig_img.getdata()
             new_data = []
             for item in datas:
@@ -145,11 +139,9 @@ def create_signature_image_bytes(signer_name: str) -> bytes:
     except Exception as e:
         print(f"[SIGNATURE IMAGE ERROR] Không thể tải ảnh chữ ký tay: {e}")
 
-    # 3. Tên người ký căn giữa
     x_name = get_centered_x(text_name, font_body)
     draw.text((x_name, 175), text_name, fill=(204, 0, 0), font=font_body)
 
-    # 4. Ngày tháng căn giữa
     x_date = get_centered_x(text_date, font_body)
     draw.text((x_date, 205), text_date, fill=(204, 0, 0), font=font_body)
 
@@ -203,12 +195,13 @@ async def process_signing_task(file_url: str, hop_dong_id: str, webhook_url: str
     is_signed = False
     public_signed_url = ""
 
-    print(f"--> [DOWNLOADING] Link file thực tế: '{file_url}'")
+    print(f"--> [DOWNLOADING] Link file thực tế: '{file_url}'", flush=True)
 
     if file_url and file_url.startswith("http"):
         async with httpx.AsyncClient() as client:
             try:
                 res = await client.get(file_url, follow_redirects=True, timeout=30.0)
+                print(f"--> [DOWNLOAD STATUS] Mã phản hồi tải file: {res.status_code}", flush=True)
                 if res.status_code == 200:
                     signed_bytes = apply_digital_signature_to_pdf(
                         input_pdf_bytes=res.content, 
@@ -221,11 +214,11 @@ async def process_signing_task(file_url: str, hop_dong_id: str, webhook_url: str
                         
                         if public_signed_url:
                             is_signed = True
-                            print(f"--> [HF PUBLIC LINK THÀNH CÔNG]: {public_signed_url}")
+                            print(f"--> [HF PUBLIC LINK THÀNH CÔNG]: {public_signed_url}", flush=True)
                 else:
-                    print(f"--> [DOWNLOAD ERROR] Status Code từ server chứa file: {res.status_code}")
+                    print(f"--> [DOWNLOAD ERROR] Status Code từ server chứa file: {res.status_code}", flush=True)
             except Exception as e:
-                print(f"--> [DOWNLOAD ERROR] Lỗi tải/xử lý file: {e}")
+                print(f"--> [DOWNLOAD ERROR] Lỗi tải/xử lý file: {e}", flush=True)
 
     payload = {
         "linkFile": public_signed_url,
@@ -234,58 +227,65 @@ async def process_signing_task(file_url: str, hop_dong_id: str, webhook_url: str
         "hopDongThietKeld": hop_dong_id
     }
     
-    print(f"--> [PAYLOAD GỬI CRM]: {json.dumps(payload, ensure_ascii=False, indent=2)}")
+    print(f"--> [PAYLOAD GỬI CRM]: {json.dumps(payload, ensure_ascii=False, indent=2)}", flush=True)
 
     if webhook_url:
         async with httpx.AsyncClient() as client:
             try:
                 res = await client.post(webhook_url, json=payload, timeout=10.0)
-                print(f"--> [WEBHOOK RESULT] Status Code từ CRM: {res.status_code}")
-                print(f"--> [WEBHOOK RESPONSE BODY]: {res.text}")
+                print(f"--> [WEBHOOK RESULT] Status Code từ CRM: {res.status_code}", flush=True)
+                print(f"--> [WEBHOOK RESPONSE BODY]: {res.text}", flush=True)
             except Exception as e:
-                print(f"--> [WEBHOOK ERROR] Lỗi bắn webhook: {e}")
+                print(f"--> [WEBHOOK ERROR] Lỗi bắn webhook: {e}", flush=True)
 
 
 @app.post("/api/v1/sign")
-async def mock_sign_request(request: Request, background_tasks: BackgroundTasks):
-    raw_body_bytes = await request.body()
-    raw_body_str = raw_body_bytes.decode("utf-8", errors="ignore")
-
-    body_json = {}
+async def mock_sign_request(request: Request):
+    print("================ [NHẬN REQUEST MỚI TỪ CRM] ================", flush=True)
     try:
-        parsed_data = json.loads(raw_body_str)
-        if isinstance(parsed_data, dict):
-            body_json = parsed_data
-    except Exception:
-        pass
+        raw_body_bytes = await request.body()
+        raw_body_str = raw_body_bytes.decode("utf-8", errors="ignore")
+        print(f"👉 Raw Body:\n{raw_body_str}", flush=True)
 
-    hop_dong_id = (
-        body_json.get("hopDongThietKeId") 
-        or body_json.get("hopDongThietKeld") 
-        or extract_exact_hop_dong_id(raw_body_str)
-    )
+        body_json = {}
+        try:
+            parsed_data = json.loads(raw_body_str)
+            if isinstance(parsed_data, dict):
+                body_json = parsed_data
+        except Exception:
+            pass
 
-    file_url = extract_url_from_text(raw_body_str)
-    webhook_url = body_json.get("webhook_url") if isinstance(body_json, dict) else None
-    if not webhook_url:
-        webhook_url = TWENTY_CRM_WEBHOOK_URL
+        hop_dong_id = (
+            body_json.get("hopDongThietKeId") 
+            or body_json.get("hopDongThietKeld") 
+            or extract_exact_hop_dong_id(raw_body_str)
+        )
 
-    background_tasks.add_task(
-        process_signing_task, 
-        file_url, 
-        hop_dong_id, 
-        webhook_url
-    )
+        file_url = extract_url_from_text(raw_body_str)
+        webhook_url = body_json.get("webhook_url") if isinstance(body_json, dict) else None
+        if not webhook_url:
+            webhook_url = TWENTY_CRM_WEBHOOK_URL
 
-    return JSONResponse(
-        status_code=200,
-        content={
-            "message": "Đã tiếp nhận yêu cầu ký file thành công.",
-            "hopDongThietKeId": hop_dong_id,
-            "hopDongThietKeld": hop_dong_id,
-            "status": "PROCESSING"
-        }
-    )
+        print(f"👉 Trích xuất -> ID: {hop_dong_id} | File URL: {file_url}", flush=True)
+
+        # Chạy trực tiếp tuần tự để bắt buộc in log ra màn hình Render ngay lập tức
+        await process_signing_task(file_url, hop_dong_id, webhook_url)
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "message": "Đã xử lý xong yêu cầu ký file.",
+                "hopDongThietKeId": hop_dong_id,
+                "hopDongThietKeld": hop_dong_id,
+                "status": "COMPLETED"
+            }
+        )
+    except Exception as e:
+        print(f"❌ [LỖI API SIGN]: {e}", flush=True)
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
 
 with gr.Blocks(title="Twenty CRM Signing API") as demo:
     gr.Markdown("# 🖋️ Twenty CRM PDF Signing Backend")
